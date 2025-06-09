@@ -430,10 +430,18 @@ $ParentPage = "/index.php";
      <script>                                     
 $(document).ready(function(){
 
-$(function() {
-    var result = {};
+function initializeCalendarDragDrop() {
+    // Ensure any existing draggables/droppables are destroyed to prevent duplicates if this is called multiple times
+    if ($(".draggable").data('ui-draggable')) {
+        $(".draggable").draggable('destroy');
+    }
+    if ($(".droppable").data('ui-droppable')) {
+        $(".droppable").droppable('destroy');
+    }
+
+    // var result = {}; // This seems unused in the optimistic logic
     $(".draggable").draggable({
-    	start:function(event, ui){ // Corrected signature: added ui parameter
+    	start:function(event, ui){ 
             // result.drag = e.target.id.split("_")[1]; // This 'result' variable seems part of an old logic, not used in new one.
             EventID = $(this).attr('EventID'); // Global from original script
             EventType = $(this).attr('EventType'); // Global from original script
@@ -463,63 +471,96 @@ $(function() {
     $(".droppable").droppable({
         drop: function(event, ui) { // 'this' is the droppable cell
             var $thisCell = $(this);
-            var newDate = $thisCell.attr('data-id'); // Assuming data-id="YYYY-MM-DD" from previous changes.
-            
-            // These are from the draggable element helper, not the original element
+            // Ensure data-id attribute exists, otherwise default or error out
+            var newDateAttr = $thisCell.attr('data-id');
+            if (!newDateAttr) {
+                console.error("Target cell is missing data-id attribute.");
+                ui.helper.remove(); // Remove helper
+                if (window.draggedOriginalElement) { // Reset original element if drag started
+                    $(window.draggedOriginalElement).css('opacity', 1);
+                    window.draggedOriginalElement = null;
+                    window.originalCell = null;
+                }
+                return; // Stop processing if target date is unknown
+            }
+            var newDate = newDateAttr;
+
             var eventId = ui.draggable.attr('EventID'); 
             var eventType = ui.draggable.attr('EventType');
             
             var originalDate = "";
-            if(window.draggedOriginalElement) { // Get original date from the stored element
-                originalDate = window.draggedOriginalElement.closest('.CellCase').attr('data-id');
+            if(window.draggedOriginalElement) { 
+                var originalCellDataId = window.draggedOriginalElement.closest('.CellCase').attr('data-id');
+                if (originalCellDataId) {
+                    originalDate = originalCellDataId;
+                } else {
+                     console.warn("Could not determine original date of dragged event.");
+                }
+            } else {
+                 console.warn("window.draggedOriginalElement is not set.");
+                 // Potentially try to get info from ui.draggable if original element tracking failed
+                 // This part is tricky as ui.draggable is a clone.
             }
+            
+            // Ensure EventID and EventType are valid before proceeding
+            if (!eventId || !eventType) {
+                console.error("Missing EventID or EventType on dragged item.", ui.draggable);
+                alert("Cannot move item: missing critical information.");
+                ui.helper.remove();
+                 if (window.draggedOriginalElement) {
+                    $(window.draggedOriginalElement).css('opacity', 1);
+                 }
+                window.draggedOriginalElement = null;
+                window.originalCell = null;
+                return;
+            }
+
 
             var r = confirm("Are you sure you want to move " + eventType + " ID# " + eventId + " from " + originalDate + " to " + newDate + "?");
             if (r == true) {
-                // Optimistic Move:
-                var $movedElement = $(window.draggedOriginalElement).detach(); // Detach original from old cell
-                $thisCell.append($movedElement); // Append original to new cell
-                $movedElement.css('opacity', 1); // Reset opacity
+                if (!window.draggedOriginalElement) {
+                    console.error("Cannot perform optimistic move: window.draggedOriginalElement is not available.");
+                    alert("An error occurred. Please try again.");
+                    ui.helper.remove();
+                    return;
+                }
+                var $movedElement = $(window.draggedOriginalElement).detach(); 
+                $thisCell.append($movedElement); 
+                $movedElement.css('opacity', 1); 
 
                 $.get("ajax.php", { NewDate: newDate, EventType: eventType, EventID: eventId })
                     .done(function(data) {
                         console.log("Move successful on server for event ID: " + eventId + " to date: " + newDate +".");
-                        // UI is already updated.
-                        // Response 'data' could be used to update event with new ID if backend changes it.
                     })
                     .fail(function() {
                         alert("Move failed on server. Reverting.");
-                        // Revert UI:
-                        if (window.originalCell && $movedElement.length) { // Ensure $movedElement is valid
-                             $(window.originalCell).append($movedElement.detach()); // Move back to original cell
+                        if (window.originalCell && $movedElement.length) { 
+                             $(window.originalCell).append($movedElement.detach()); 
                         } else {
-                            // Fallback or error if original cell/element not found.
-                            // This might mean a full refresh is the safest revert.
-                            // location.reload(); 
+                             console.error("Failed to revert: original cell or moved element missing.");
+                             // Consider a page reload if revert is critical and elements are lost
+                             // location.reload(); 
                         }
                     })
                     .always(function() {
-                        // Cleanup global references
                         window.draggedOriginalElement = null;
                         window.originalCell = null;
                     });
             } else {
-                // User cancelled the move
-                ui.helper.remove(); // Remove the clone helper
+                ui.helper.remove(); 
                 if (window.draggedOriginalElement) {
-                    $(window.draggedOriginalElement).css('opacity', 1); // Reset opacity of the original element
+                    $(window.draggedOriginalElement).css('opacity', 1); 
                 }
-                // Cleanup global references
                 window.draggedOriginalElement = null;
                 window.originalCell = null;
             }
-            // Do NOT use $this.append(ui.draggable); because ui.draggable is the helper clone.
-            // We are moving the window.draggedOriginalElement.
         }
     });
-});
+} // End of initializeCalendarDragDrop function
 
-// Erroneous block removed.
+$(function() { // This is the main $(document).ready shorthand
+    initializeCalendarDragDrop();
+    // Other initializations that were in this block, if any
 
 var resposition = '';
 var dragposition = '';
@@ -1024,70 +1065,21 @@ setInterval(function(){
         ShipmentArrived: document.getElementById("filter-shipment-arrived").checked,
         ShipmentETA: document.getElementById("filter-shipment-eta").checked
     };
-$("#CalendarsToRefresh").load('<? echo $CurrentPageNow; ?> #CalendarsToRefresh', function(resp, status, xhr) {
-$(function() {
-    var result = {};
-    $(".draggable").draggable({
-    	start:function(e){
-            result.drag = e.target.id.split("_")[1];
-    EventID = $(this).attr('EventID');
-    EventType = $(this).attr('EventType');
-    ParentABlock = $(this).siblings().attr('CurrentDateBlock');
-    },
-        
-    appendTo: 'body',
-    containment: "window",
-    scroll: false,
-    helper: 'clone'
-    });
-    $(".droppable").droppable({
+$("#CalendarsToRefresh").load(<?php echo json_encode($CurrentPageNow . ' #CalendarsToRefresh'); ?>, function(resp, status, xhr) {
+    if (status === "success" || status === "notmodified") { // Check if load was successful
+        initializeCalendarDragDrop(); // Re-initialize drag and drop on newly loaded content
 
-        drop: function(event, ui) {
-            
-            var $this = $(this);
-            result.drop = event.target.id.split("_")[1];
-            if(result.drag == result.drop){
-var NewParentABlock = event.target.id;
-NewParentABlock = NewParentABlock.substring(3);
-
-var r = confirm(" Are you sure you want to move " + EventType + " ID# " + EventID + " from " + ParentABlock  +  " to " + NewParentABlock + "?");
-if (r == true) {
-                $.get("ajax.php", {NewDate:NewParentABlock,EventType:EventType,EventID:EventID}).done(function(data){                
-                    // Display the returned data in browser                                     
-                }); 
-}
-else{
- ui.helper.hide();
-
-$( ".droppable" ).draggable( "option", "cancel", ".title" );
-
-
-
-}           
+        // Reapply filter states after refresh
+        document.querySelectorAll(".event").forEach(event_element => { // Renamed 'event' to 'event_element' to avoid conflict
+            const eventType = event_element.getAttribute("EventType");
+            if (filterStates[eventType] === false) { // Check against the stored states
+                event_element.style.display = "none";
             }
-
-            $this.append(ui.draggable);    
-            
-            var width = $this.width();
-            var height = $this.height();
-            var cntrLeft = (width / 2) - (ui.draggable.width() / 2);
-            var cntrTop = (height / 2) - (ui.draggable.height() / 2);
-            
-            ui.draggable.css({
-                left: cntrLeft + "px",
-                top: cntrTop + "px"  
-            });
-        }
-    });
-
-                // Reapply filter states after refresh
-                document.querySelectorAll(".event").forEach(event => {
-                const eventType = event.getAttribute("EventType");
-                if (filterStates[eventType] === false) {
-                    event.style.display = "none";
-                }
-            });
-});
+        });
+    } else if (status === "error") {
+        console.error("Error loading calendar content: " + xhr.status + " " + xhr.statusText);
+    }
+// }); // This was the extra });, now removed.
 });
 
 
@@ -1095,8 +1087,24 @@ $( ".droppable" ).draggable( "option", "cancel", ".title" );
 });
 
 </script>  
-
-
+<?php
+// The malformed JavaScript block that was here, starting with:
+//         const eventType = event.getAttribute("EventType");
+//         if (filterStates[eventType] === false) {
+//             event.style.display = "none";
+//         }
+//     });
+// });
+// });
+//
+//
+// }, 15000);
+// });
+//
+// </script>  
+//
+// Has been removed.
+?>
   
 
 <?
@@ -1647,7 +1655,7 @@ echo"</div>";
 
     </li>
     
-    <li id="ButtonPasteEvent" style="padding:5px 15px 5px 15px; ;
+    <li id="ButtonPasteEvent" style="padding:5px 15px 5px 15px; 
     <?    if (isset($_SESSION["Calendar_ID_Event_Copied"]))
     {echo"color:black;";} 
     else{echo" color:gray";}?>
