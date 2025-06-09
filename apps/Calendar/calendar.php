@@ -850,9 +850,12 @@ $(document).ready(function(){
 
 /// Attempt scrolling to the current date:
 let currentDate = new Date();
-CurrentCaseDate = document.getElementById("li-"+currentDate.toISOString().split('T')[0]);
-CurrentCaseDate.scrollIntoView({behavior: 'smooth', block: 'center'});
+let currentId = "li-" + currentDate.toISOString().split('T')[0]; // Store ID in a variable for clarity
+let CurrentCaseDate = document.getElementById(currentId);    // Declare CurrentCaseDate with let
 
+if (CurrentCaseDate) { // Add this null check
+    CurrentCaseDate.scrollIntoView({behavior: 'smooth', block: 'center'});
+}
 
 /// Refresh calendars  
 setInterval(function(){
@@ -972,13 +975,152 @@ $AlleventsIndividual = "";
 
   $Allevents = array($AlleventsIndividual);    
 
+function fetchAllCalendarDataForPeriod($startDate, $endDate, $con) {
+    $scheduledItems = [];
+
+    // Initialize $scheduledItems for the date range
+    $currentDate = new DateTime($startDate);
+    $endDateObj = new DateTime($endDate);
+    while ($currentDate <= $endDateObj) {
+        $dateStr = $currentDate->format('Y-m-d');
+        $scheduledItems[$dateStr] = [
+            'calendarEvents' => [],
+            'shipmentsArrived' => [],
+            'shipmentsETA' => [],
+            'shipmentsSent' => [],
+            'phoneNotes' => []
+        ];
+        $currentDate->modify('+1 day');
+    }
+
+    // Fetch Calendar Events
+    $sqlCalendarEvents = "
+        SELECT * FROM calendarevents 
+        WHERE 
+            ( (endday IS NULL OR endday = '' OR endday = '0') AND STR_TO_DATE(CONCAT(year, '-', month, '-', day), '%Y-%m-%d') BETWEEN ? AND ? ) OR 
+            ( (endday IS NOT NULL AND endday != '' AND endday != '0') AND 
+              STR_TO_DATE(CONCAT(year, '-', month, '-', day), '%Y-%m-%d') <= ? AND 
+              STR_TO_DATE(CONCAT(endyear, '-', endmonth, '-', endday), '%Y-%m-%d') >= ? );
+    ";
+    $stmt = mysqli_prepare($con, $sqlCalendarEvents);
+    if ($stmt) {
+        mysqli_stmt_bind_param($stmt, "ssss", $startDate, $endDate, $endDate, $startDate);
+        mysqli_stmt_execute($stmt);
+        $result = mysqli_stmt_get_result($stmt);
+        $calendarEventsResult = [];
+        while ($row = mysqli_fetch_assoc($result)) {
+            $calendarEventsResult[] = $row;
+        }
+        mysqli_stmt_close($stmt);
+
+        foreach ($calendarEventsResult as $event) {
+            $eventStartDateStr = sprintf('%04d-%02d-%02d', $event['year'], $event['month'], $event['day']);
+            
+            if (!empty($event['endyear']) && !empty($event['endmonth']) && !empty($event['endday']) && $event['endday'] != '0') {
+                $eventEndDateStr = sprintf('%04d-%02d-%02d', $event['endyear'], $event['endmonth'], $event['endday']);
+                $currentEventDate = new DateTime($eventStartDateStr);
+                $eventEndDate = new DateTime($eventEndDateStr);
+
+                while ($currentEventDate <= $eventEndDate) {
+                    $dateKey = $currentEventDate->format('Y-m-d');
+                    if (isset($scheduledItems[$dateKey])) {
+                        $scheduledItems[$dateKey]['calendarEvents'][] = $event;
+                    }
+                    $currentEventDate->modify('+1 day');
+                }
+            } else {
+                if (isset($scheduledItems[$eventStartDateStr])) {
+                    $scheduledItems[$eventStartDateStr]['calendarEvents'][] = $event;
+                }
+            }
+        }
+    } else {
+        // Handle prepare statement error if necessary
+        error_log("MySQLi prepare error for calendar events: " . mysqli_error($con));
+    }
+
+
+    // Fetch Shipments
+    $sqlShipments = "
+        SELECT id, datesent, datereceived, title, city, eta FROM shipments 
+        WHERE (datereceived >= ? AND datereceived <= ?) OR 
+              (eta >= ? AND eta <= ?) OR 
+              (datesent >= ? AND datesent <= ?);
+    ";
+    $stmt = mysqli_prepare($con, $sqlShipments);
+    if ($stmt) {
+        mysqli_stmt_bind_param($stmt, "ssssss", $startDate, $endDate, $startDate, $endDate, $startDate, $endDate);
+        mysqli_stmt_execute($stmt);
+        $result = mysqli_stmt_get_result($stmt);
+        $shipmentsResult = [];
+        while ($row = mysqli_fetch_assoc($result)) {
+            $shipmentsResult[] = $row;
+        }
+        mysqli_stmt_close($stmt);
+
+        foreach ($shipmentsResult as $shipment) {
+            if (!empty($shipment['datereceived']) && $shipment['datereceived'] != '0000-00-00') {
+                $dateKey = date('Y-m-d', strtotime($shipment['datereceived']));
+                 if (isset($scheduledItems[$dateKey])) {
+                    $scheduledItems[$dateKey]['shipmentsArrived'][] = $shipment;
+                }
+            }
+            if (!empty($shipment['eta']) && $shipment['eta'] != '0000-00-00') {
+                $dateKey = date('Y-m-d', strtotime($shipment['eta']));
+                 if (isset($scheduledItems[$dateKey])) {
+                    $scheduledItems[$dateKey]['shipmentsETA'][] = $shipment;
+                }
+            }
+            if (!empty($shipment['datesent']) && $shipment['datesent'] != '0000-00-00') {
+                $dateKey = date('Y-m-d', strtotime($shipment['datesent']));
+                if (isset($scheduledItems[$dateKey])) {
+                    $scheduledItems[$dateKey]['shipmentsSent'][] = $shipment;
+                }
+            }
+        }
+    } else {
+        error_log("MySQLi prepare error for shipments: " . mysqli_error($con));
+    }
+
+    // Fetch Phone Notes
+    $sqlPhoneNotes = "
+        SELECT id, date, firstname, lastname FROM phonenotes 
+        WHERE date BETWEEN ? AND ?;
+    ";
+    $stmt = mysqli_prepare($con, $sqlPhoneNotes);
+    if ($stmt) {
+        mysqli_stmt_bind_param($stmt, "ss", $startDate, $endDate);
+        mysqli_stmt_execute($stmt);
+        $result = mysqli_stmt_get_result($stmt);
+        $phoneNotesResult = [];
+        while ($row = mysqli_fetch_assoc($result)) {
+            $phoneNotesResult[] = $row;
+        }
+        mysqli_stmt_close($stmt);
+
+        foreach ($phoneNotesResult as $note) {
+            if (!empty($note['date']) && $note['date'] != '0000-00-00') {
+                $dateKey = date('Y-m-d', strtotime($note['date']));
+                 if (isset($scheduledItems[$dateKey])) {
+                    $scheduledItems[$dateKey]['phoneNotes'][] = $note;
+                }
+            }
+        }
+    } else {
+        error_log("MySQLi prepare error for phone notes: " . mysqli_error($con));
+    }
+    
+    return $scheduledItems;
+}
+
 class Calendar {  
      
     /**
      * Constructor
      */
-    public function __construct(){     
+    public function __construct($allPeriodData = []){     
         $this->naviHref = htmlentities($_SERVER['PHP_SELF']);
+        $this->allPeriodData = $allPeriodData;
     }
      
     /********************* PROPERTY ********************/  
@@ -989,6 +1131,7 @@ class Calendar {
     private $currentDate=null;    
     private $daysInMonth=0;     
     private $naviHref= null;
+    private $allPeriodData = [];
      
     /********************* PUBLIC **********************/  
         
@@ -996,8 +1139,8 @@ class Calendar {
     * print out the calendar
     */
     public function show($ThisMonth) {
-        $year  == null;         
-        $month == null;         
+        $year  = null; // Ensure $year is initialized to null
+        $month = null; // Ensure $month is initialized to null      
         if(null==$year&&isset($_GET['year'])){
             $year = $_GET['year'];         
         }
@@ -1011,8 +1154,10 @@ class Calendar {
         } 
         
         if($ThisMonth == "next"){
-        if($month==12){$month=1; $year = $year+1;}
-        else{$month = $month+1;}
+            $currentTimestamp = strtotime($year.'-'.$month.'-01');
+            $nextMonthTimestamp = strtotime('+1 month', $currentTimestamp);
+            $year = date('Y', $nextMonthTimestamp);
+            $month = date('m', $nextMonthTimestamp);
         }                         
         $this->currentYear=$year;         
         $this->currentMonth=$month;         
@@ -1043,126 +1188,63 @@ class Calendar {
     }
 
 
-public function getCalendarEvents($CellDate) { 
-   $path = $_SERVER['DOCUMENT_ROOT'];
-   $path .= "/config.php";
-   include($path);
-            $eventyear = $this->currentYear; 
-            $eventmonth = $this->currentMonth; 
-            $eventday = $this->currentDay -1;  
-            
-            if($eventday<10){$eventday="0$eventday";}           
-           
-           
-            $sql = "SELECT * FROM calendarevents";      
-            $results = mysqli_query($con,$sql);              
-            $resultset = array();
-            $AllResultsEventsCalendarToday = "";
-            while ($row = mysqli_fetch_array($results,MYSQLI_ASSOC)) {
-              if(empty($row["endday"])){
-              if(($eventyear==$row["year"])AND($eventmonth==$row["month"])AND($eventday==$row["day"])){
-              $resultset[] = $row;
-              }
-              }    
-              else{
-              $eventcurrentdate = $CellDate;
-              $eventstartdate = $row["year"]."-".$row["month"]."-".$row["day"];
-              $eventenddate = $row["endyear"]."-".$row["endmonth"]."-".$row["endday"];
-              if(($eventcurrentdate >= $eventstartdate) && ($eventcurrentdate <= $eventenddate)){
-              $resultset[] = $row;
-              }
-              }
-            }
+private function _formatDayEventsHtml($dailyData) { 
+    $AllResultsEventsCalendarToday = "";
 
-           
+    // Format Calendar Events
+    foreach ($dailyData['calendarEvents'] as $result){
+        if(!empty($result["tagcolor"])){$tagcolor=$result["tagcolor"];}else{$tagcolor="orange";}
+        $AppToDisplay = "CalendarEvent";
+        $AllResultsEventsCalendarToday .='<a onclick="ShowExternalDataPopup('.$result["id"].',\''.$AppToDisplay.'\')" ng-click="openFolder(detail.id, detail.name)" data-id="'.$result["id"].'"  style="display:block; cursor:pointer;" class="draggable event CustomRightClick" EventType="CalendarEvent" EventID="'.$result["id"].'">
+        <div id="DateEvents" style="background-color:'.$tagcolor.';">'; 
+        if(
+          (strpos($result["title"],'Call')!== false)OR
+          (strpos($result["title"],'call')!== false)
+        ){$titleToShow='&#9742; '.$result["title"].' ';}else{$titleToShow=''.$result["title"].'';}   
+          
+        $AllResultsEventsCalendarToday .= ' '.$titleToShow.'
+        </div>            
+    </a>';}  
 
-            // $resultset now holds all rows from the first query.
-            foreach ($resultset as $result){
-            if(!empty($result["tagcolor"])){$tagcolor=$result["tagcolor"];}else{$tagcolor="orange";}
-            $AppToDisplay = "CalendarEvent";
-         $AllResultsEventsCalendarToday .='<a onclick="ShowExternalDataPopup('.$result["id"].',\''.$AppToDisplay.'\')" ng-click="openFolder(detail.id, detail.name)" data-id="'.$result["id"].'"  style="display:block; cursor:pointer;" class="draggable event CustomRightClick" EventType="CalendarEvent" EventID="'.$result["id"].'">
-            <div id="DateEvents" style="background-color:'.$tagcolor.';">'; 
-            if(
-              (strpos($result["title"],'Call')!== false)OR
-              (strpos($result["title"],'call')!== false)
-            ){$titleToShow='&#9742; '.$result["title"].' ';}else{$titleToShow=''.$result["title"].'';}   
-              
-            $AllResultsEventsCalendarToday .= ' '.$titleToShow.'
-            </div>            
-        </a>';}  
+    // Format Shipments Arrived
+    foreach ($dailyData['shipmentsArrived'] as $resultship){
+        $tagcolor="#FFFFFF";
+        $AppToDisplay = 'Shipment';
+        $AllResultsEventsCalendarToday .='<a onclick="ShowExternalDataPopup('.$resultship["id"].',\'Shipment\')" style="display:block; cursor:pointer;" class="event" EventType="ShipmentArrived" EventID="'.$resultship["id"].'" ng-click="openFolder(detail.id, detail.name)" data-id="'.$resultship["id"].'">
+        <div id="DateEvents" style="background-color:'.$tagcolor.'; ">
+        &#9972; '.$resultship["title"].' arrived in '.$resultship["city"].'
+        </div>            
+    </a>';}  
 
-/* SHIPMENTS  */
+    // Format Shipments Sent
+    foreach ($dailyData['shipmentsSent'] as $resultshipped){
+      $tagcolor="#FFFFFF";
+      $AllResultsEventsCalendarToday .='<a onclick="ShowExternalDataPopup('.$resultshipped["id"].',\'Shipment\')" style="display:block; cursor:pointer;" class="event" EventType="ShipmentArrived" EventID="'.$resultshipped["id"].'" ng-click="openFolder(detail.id, detail.name)" data-id="'.$resultshipped["id"].'">
+      <div id="DateEvents" style="background-color:'.$tagcolor.'; ">
+      &#9972; '.$resultshipped["title"].' shipped to '.$resultshipped["city"].'
+      </div>            
+  </a>';}  
 
-            $sql = "SELECT id,datesent,datereceived,title,city,eta FROM shipments";      
-            $results = mysqli_query($con,$sql);               
-            while ($row = mysqli_fetch_array($results,MYSQLI_ASSOC)) {
-              if($eventcurrentdate == $row["datereceived"]){
-              $resultsetship[] = $row;
-              }  
-              elseif($eventcurrentdate == $row["eta"]){
-              $resultsetas[] = $row;
-              }   
-              elseif($eventcurrentdate == $row["datesent"]){
-              $resultsshipped[] = $row;
-              }           
-            }           
- 
-            // $resultset now holds all rows from the first query.
-            foreach ($resultsetship as $resultship){
-            $tagcolor="#FFFFFF";
-            $AppToDisplay = 'Shipment';
-
-         $AllResultsEventsCalendarToday .='<a onclick="ShowExternalDataPopup('.$resultship["id"].',\'Shipment\')" style="display:block; cursor:pointer;" class="event" EventType="ShipmentArrived" EventID="'.$resultship["id"].'" ng-click="openFolder(detail.id, detail.name)" data-id="'.$resultship["id"].'">
-            <div id="DateEvents" style="background-color:'.$tagcolor.'; ">
-            &#9972; '.$resultship["title"].' arrived in '.$resultship["city"].'
-            </div>            
-        </a>';}  
-        foreach ($resultsshipped as $resultshipped){
-          $tagcolor="#FFFFFF";
-       $AllResultsEventsCalendarToday .='<a onclick="ShowExternalDataPopup('.$resultshipped["id"].',\'Shipment\')" style="display:block; cursor:pointer;" class="event" EventType="ShipmentArrived" EventID="'.$resultshipped["id"].'" ng-click="openFolder(detail.id, detail.name)" data-id="'.$resultshipped["id"].'">
-          <div id="DateEvents" style="background-color:'.$tagcolor.'; ">
-          &#9972; '.$resultshipped["title"].' shipped to '.$resultshipped["city"].'
-          </div>            
-      </a>';}  
-            // $resultsetas  ETA of SHIPMENTS now holds all rows from the first query.
-            foreach ($resultsetas as $resultseta){
-            $tagcolor="#FF5E5E";
-         $AllResultsEventsCalendarToday .='<a onclick="ShowExternalDataPopup('.$resultseta["id"].',\'Shipment\')" style="display:block; cursor:pointer;" class="event"  EventType="ShipmentETA" EventID="'.$resultseta["id"].'" ng-click="openFolder(detail.id, detail.name)" data-id="'.$resultseta["id"].'">
-            <div id="DateEvents" style="background-color:'.$tagcolor.';">
-            &#9972; ETA: '.$resultseta["title"].' in '.$resultseta["city"].'
-            </div>            
-        </a>';}     
-        
-      
-        
-                          
-/* End of SHIPMENTS  */ 
-/* PHONE NOTES  */
-
-            $sql = "SELECT id,date,firstname,lastname FROM phonenotes";      
-            $results = mysqli_query($con,$sql);               
-            while ($row = mysqli_fetch_array($results,MYSQLI_ASSOC)) {
-              if($eventcurrentdate == $row["date"]){
-              $resultsetphone[] = $row;
-              }            
-            }           
- 
-            // $resultset now holds all rows from the first query.
-            foreach ($resultsetphone as $resultphone){
-            $tagcolor="#ccffcc";
-         //$AllResultsEventsCalendarToday .='<a href="/apps/PhoneNotes/phonenotes.php?phonenoteid='.$resultphone["id"].'" class="event PhoneNoteEvent" style="display:block;" EventType="PhoneNote" EventID="'.$resultphone["id"].'">
-         $AppToDisplay = 'ShowPhoneNote';
-         $AllResultsEventsCalendarToday .='<a onclick="ShowExternalDataPopup('.$resultphone["id"].',\''.$AppToDisplay.'\')" ng-click="openFolder(detail.id, detail.name)" data-id="'.$resultphone["id"].'" class="CustomRightClickPhoneNote event PhoneNoteEvent" style="cursor:pointer; display:block;" EventType="PhoneNote" EventID="'.$resultphone["id"].'">
-
-            <div id="DateEvents" style="background-color:'.$tagcolor.'; ">
-            &#9742; '.$resultphone["firstname"].' '.$resultphone["lastname"].'. 
-            </div>            
-        </a>';}                    
-/* End of PHONE NOTES  */ 
-        
-        return $AllResultsEventsCalendarToday;   
-                              
-
+    // Format Shipments ETA
+    foreach ($dailyData['shipmentsETA'] as $resultseta){
+        $tagcolor="#FF5E5E";
+        $AllResultsEventsCalendarToday .='<a onclick="ShowExternalDataPopup('.$resultseta["id"].',\'Shipment\')" style="display:block; cursor:pointer;" class="event"  EventType="ShipmentETA" EventID="'.$resultseta["id"].'" ng-click="openFolder(detail.id, detail.name)" data-id="'.$resultseta["id"].'">
+        <div id="DateEvents" style="background-color:'.$tagcolor.';">
+        &#9972; ETA: '.$resultseta["title"].' in '.$resultseta["city"].'
+        </div>            
+    </a>';}     
+    
+    // Format Phone Notes
+    foreach ($dailyData['phoneNotes'] as $resultphone){
+        $tagcolor="#ccffcc";
+        $AppToDisplay = 'ShowPhoneNote';
+        $AllResultsEventsCalendarToday .='<a onclick="ShowExternalDataPopup('.$resultphone["id"].',\''.$AppToDisplay.'\')" ng-click="openFolder(detail.id, detail.name)" data-id="'.$resultphone["id"].'" class="CustomRightClickPhoneNote event PhoneNoteEvent" style="cursor:pointer; display:block;" EventType="PhoneNote" EventID="'.$resultphone["id"].'">
+        <div id="DateEvents" style="background-color:'.$tagcolor.'; ">
+        &#9742; '.$resultphone["firstname"].' '.$resultphone["lastname"].'. 
+        </div>            
+    </a>';}                    
+    
+    return $AllResultsEventsCalendarToday;   
 }
 
 
@@ -1174,10 +1256,15 @@ public function getCalendarEvents($CellDate) {
     * create the li element for ul
     */    
      public function _showDay($cellNumber){         
-        if($this->currentDay==0){             
-            $firstDayOfTheWeek = date('N',strtotime($this->currentYear.'-'.$this->currentMonth.'-02'));                    
-            if(intval($cellNumber) == intval($firstDayOfTheWeek)){                 
-                $this->currentDay=1;                 
+        if($this->currentDay==0){ // Check if the first day (e.g. 1) of the month has been found yet for this rendering
+            $weekRow = floor(($cellNumber - 1) / 7); // 0-indexed week row
+            $dayColumn = ($cellNumber - 1) % 7;    // 0-indexed day column (0=Sunday, 1=Monday...)
+
+            if ($weekRow == 0) { // We are in the first row of cells displayed in the calendar
+                $dayOfWeekOfFirstOfMonth_0_indexed = (int)date('w', strtotime($this->currentYear.'-'.$this->currentMonth.'-01')); // 0=Sun, 1=Mon...
+                if ($dayColumn == $dayOfWeekOfFirstOfMonth_0_indexed) {
+                    $this->currentDay = 1; // Start counting days from 1
+                }
             }
         }
          
@@ -1185,35 +1272,32 @@ public function getCalendarEvents($CellDate) {
             $this->currentDate = date('Y-m-d',strtotime($this->currentYear.'-'.$this->currentMonth.'-'.($this->currentDay)));             
             $cellContent = $this->currentDay;             
             $this->currentDay++;  
-            $eventyear = $this->currentYear; 
-            $eventmonth = $this->currentMonth; 
-            $eventday = $this->currentDay -1;  
             
             $today = date("Y-m-d");
-            if($eventday<10){$eventday="0$eventday";}
-            if(strlen($eventmonth)==1){$eventmonth="0$eventmonth";}
-             
-            if($today=="$eventyear-$eventmonth-$eventday"){$TodayBackColor=" style=\"text-align:left; padding:5px;  background-color:dodgerblue; overflow:scroll;\"";} 
+            // Use $this->currentDate for today's background color check
+            $TodayBackColor = ($today == $this->currentDate) ? " style=\"text-align:left; padding:5px; background-color:dodgerblue; overflow:scroll;\"" : "";
             
-            global $Allevents;
-            foreach($Allevents as $event){
-            $events = $event;
-            }
+            // Retrieve daily data from pre-fetched data
+            $dailyData = isset($this->allPeriodData[$this->currentDate]) ? $this->allPeriodData[$this->currentDate] : ['calendarEvents' => [], 'shipmentsArrived' => [], 'shipmentsETA' => [], 'shipmentsSent' => [], 'phoneNotes' => []];
                  
         }else{             
             $this->currentDate =null; 
-            $cellContent=null;            
+            $cellContent=null; 
+            $dailyData = ['calendarEvents' => [], 'shipmentsArrived' => [], 'shipmentsETA' => [], 'shipmentsSent' => [], 'phoneNotes' => []]; // Ensure $dailyData is initialized
+            $TodayBackColor = ""; // Ensure $TodayBackColor is initialized
         }  
 
-        if(!empty($eventday)){
+        // $eventday is no longer needed here for fetching, but currentDay -1 logic was for display or previous context
+        // if cellContent is not null, then it's a day in the month
+        if($cellContent !== null){ 
         return '
         <li '.$TodayBackColor.' ng-click="openFolder(detail.id, detail.name)" data-id="'.$this->currentDate.'" id="li-'.$this->currentDate.'" class="CellCase CustomRightClickCase '.($cellNumber%7==1?' start ':($cellNumber%7==0?' end ':' ')).($cellContent==null?'mask':'').' droppable">
             <span>'.$cellContent.'</span>
-            '.$this->getCalendarEvents($eventyear.'-'.$eventmonth.'-'.$eventday).'
+            '.$this->_formatDayEventsHtml($dailyData).'
         </li>';   }
         else{
         return '<li '.$TodayBackColor.' id="li-'.$this->currentDate.'" class="CellCase '.($cellNumber%7==1?' start ':($cellNumber%7==0?' end ':' ')).($cellContent==null?'mask':'').'">
-
+            <span></span>
         </li>';   }        
     }
      
@@ -1282,15 +1366,45 @@ public function getCalendarEvents($CellDate) {
     }     
 }
 
+$inputMonth = null;
+$inputYear = null;
 
-$calendar = new Calendar();
+if (isset($_GET['month']) && is_numeric($_GET['month'])) {
+    $inputMonth = (int)$_GET['month'];
+}
+if (isset($_GET['year']) && is_numeric($_GET['year'])) {
+    $inputYear = (int)$_GET['year'];
+}
+
+if ($inputMonth !== null && $inputYear !== null && $inputMonth >= 1 && $inputMonth <= 12) {
+    // Use month/year from GET parameters
+    $baseDateForCalendar = strtotime("$inputYear-$inputMonth-01");
+} else {
+    // Default to current system month/year
+    $baseDateForCalendar = time();
+}
+
+$currentDisplayMonth = (int)date('m', $baseDateForCalendar);
+$currentDisplayYear = (int)date('Y', $baseDateForCalendar);
+
+// Start date is the 1st of the current display month
+$displayStartDate = date('Y-m-01', strtotime("$currentDisplayYear-$currentDisplayMonth-01"));
+
+// End date is the last day of the *next* month (relative to current display month)
+// This ensures data for two full months is fetched for the two calendar instances.
+$nextMonthTimestamp = strtotime("$currentDisplayYear-$currentDisplayMonth-01 +1 month");
+$displayEndDate = date('Y-m-t', $nextMonthTimestamp); 
+
+$allEventsData = fetchAllCalendarDataForPeriod($displayStartDate, $displayEndDate, $con);
+
+$calendar = new Calendar($allEventsData);
 
 echo"<div id=\"CalendarsToRefresh\">"; 
 echo $calendar->show("");  
 
 echo"<br><br><br><br><br><br>";
 
-$calendarNextMonth = new Calendar("");
+$calendarNextMonth = new Calendar($allEventsData);
 echo $calendarNextMonth->show("next");
 
 
