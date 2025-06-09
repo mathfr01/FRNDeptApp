@@ -1647,7 +1647,7 @@ echo"</div>";
 
     </li>
     
-    <li id="ButtonPasteEvent" style="padding:5px 15px 5px 15px; ";
+    <li id="ButtonPasteEvent" style="padding:5px 15px 5px 15px; ;
     <?    if (isset($_SESSION["Calendar_ID_Event_Copied"]))
     {echo"color:black;";} 
     else{echo" color:gray";}?>
