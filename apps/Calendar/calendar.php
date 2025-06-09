@@ -433,64 +433,93 @@ $(document).ready(function(){
 $(function() {
     var result = {};
     $(".draggable").draggable({
-    	start:function(e){
-            result.drag = e.target.id.split("_")[1];
-    EventID = $(this).attr('EventID');
-    EventType = $(this).attr('EventType');
-    ParentABlock = $(this).siblings().attr('CurrentDateBlock');
+    	start:function(event, ui){ // Corrected signature: added ui parameter
+            // result.drag = e.target.id.split("_")[1]; // This 'result' variable seems part of an old logic, not used in new one.
+            EventID = $(this).attr('EventID'); // Global from original script
+            EventType = $(this).attr('EventType'); // Global from original script
+            // ParentABlock = $(this).siblings().attr('CurrentDateBlock'); // This seems to be for the old confirm message.
+
+            window.draggedOriginalElement = $(this);
+            window.originalCell = $(this).parent(); // The cell the event is being dragged from.
+            $(this).css('opacity', 0.5); // Visually indicate it's being moved.
+            
+            // New lines to fix helper width and ensure it's on top:
+            ui.helper.css('width', $(this).outerWidth() + 'px');
+            ui.helper.css('zIndex', 9999); 
     },
-        
+    stop: function(event, ui) {
+        // If the element is still being tracked (i.e., not successfully dropped and cleared)
+        // and its opacity is still 0.5, reset it.
+        if (window.draggedOriginalElement && $(this).css('opacity') < 1) {
+            $(this).css('opacity', 1);
+        }
+        // Note: A better place for opacity reset is within the drop's fail/always or if 'revert' is used.
+    },
     appendTo: 'body',
     containment: "window",
     scroll: false,
     helper: 'clone'
     });
     $(".droppable").droppable({
-
-        drop: function(event, ui) {
+        drop: function(event, ui) { // 'this' is the droppable cell
+            var $thisCell = $(this);
+            var newDate = $thisCell.attr('data-id'); // Assuming data-id="YYYY-MM-DD" from previous changes.
             
-            var $this = $(this);
-            result.drop = event.target.id.split("_")[1];
-            if(result.drag == result.drop){
-var NewParentABlock = event.target.id;
-NewParentABlock = NewParentABlock.substring(3);
-
-var r = confirm(" Are you sure you want to move " + EventType + " ID# " + EventID + " from " + ParentABlock  +  " to " + NewParentABlock + "?");
-if (r == true) {
-                $.get("ajax.php", {NewDate:NewParentABlock,EventType:EventType,EventID:EventID}).done(function(data){                
-                    // Display the returned data in browser                                     
-                }); 
-}
-else{
- ui.helper.hide();
-
-$( ".droppable" ).draggable( "option", "cancel", ".title" );
-
-
-
-}           
+            // These are from the draggable element helper, not the original element
+            var eventId = ui.draggable.attr('EventID'); 
+            var eventType = ui.draggable.attr('EventType');
+            
+            var originalDate = "";
+            if(window.draggedOriginalElement) { // Get original date from the stored element
+                originalDate = window.draggedOriginalElement.closest('.CellCase').attr('data-id');
             }
 
-            $this.append(ui.draggable);    
-            
-            var width = $this.width();
-            var height = $this.height();
-            var cntrLeft = (width / 2) - (ui.draggable.width() / 2);
-            var cntrTop = (height / 2) - (ui.draggable.height() / 2);
-            
-            ui.draggable.css({
-                left: cntrLeft + "px",
-                top: cntrTop + "px"  
-            });
+            var r = confirm("Are you sure you want to move " + eventType + " ID# " + eventId + " from " + originalDate + " to " + newDate + "?");
+            if (r == true) {
+                // Optimistic Move:
+                var $movedElement = $(window.draggedOriginalElement).detach(); // Detach original from old cell
+                $thisCell.append($movedElement); // Append original to new cell
+                $movedElement.css('opacity', 1); // Reset opacity
+
+                $.get("ajax.php", { NewDate: newDate, EventType: eventType, EventID: eventId })
+                    .done(function(data) {
+                        console.log("Move successful on server for event ID: " + eventId + " to date: " + newDate +".");
+                        // UI is already updated.
+                        // Response 'data' could be used to update event with new ID if backend changes it.
+                    })
+                    .fail(function() {
+                        alert("Move failed on server. Reverting.");
+                        // Revert UI:
+                        if (window.originalCell && $movedElement.length) { // Ensure $movedElement is valid
+                             $(window.originalCell).append($movedElement.detach()); // Move back to original cell
+                        } else {
+                            // Fallback or error if original cell/element not found.
+                            // This might mean a full refresh is the safest revert.
+                            // location.reload(); 
+                        }
+                    })
+                    .always(function() {
+                        // Cleanup global references
+                        window.draggedOriginalElement = null;
+                        window.originalCell = null;
+                    });
+            } else {
+                // User cancelled the move
+                ui.helper.remove(); // Remove the clone helper
+                if (window.draggedOriginalElement) {
+                    $(window.draggedOriginalElement).css('opacity', 1); // Reset opacity of the original element
+                }
+                // Cleanup global references
+                window.draggedOriginalElement = null;
+                window.originalCell = null;
+            }
+            // Do NOT use $this.append(ui.draggable); because ui.draggable is the helper clone.
+            // We are moving the window.draggedOriginalElement.
         }
     });
 });
 
-
-
-
-
-
+// Erroneous block removed.
 
 var resposition = '';
 var dragposition = '';
@@ -555,23 +584,104 @@ if ($("#CustomRightClick").addEventListener) {
     //Edit Command
     document.getElementById("ButtonEditEvent").href = "https://vgrcanada.org/apps/Calendar/calendareventedit.php?calendareventid="+EventID+"&action=edit";
 
-    //Delete Command
-    document.getElementById("ButtonDeleteEvent").href = "https://vgrcanada.org/apps/Calendar/calendarevent.php?actionform=delete&calendareventid="+EventID;
+    //Delete Command - href removed, handled by new click handler
+    // document.getElementById("ButtonDeleteEvent").href = "https://vgrcanada.org/apps/Calendar/calendarevent.php?actionform=delete&calendareventid="+EventID;
 
     //Duplicate Command
     document.getElementById("ButtonDuplicateEvent").href = "https://vgrcanada.org/apps/Calendar/calendareventedit.php?actionform=duplicate&calendareventid="+EventID;
 
     //Copy Command
-    document.getElementById("ButtonCopyEvent").onclick = function ()
-    {
-    var ID_to_copy = EventID;
-        $(function()
-        {
-            $.get("ajax.php", {EventIDtoCopy:ID_to_copy}).done(function(data){                
-                    // Display the returned data in browser      
-                }); 
+    document.getElementById("ButtonCopyEvent").onclick = function () {
+        // EventID is from the context of 'a.CustomRightClick' which was right-clicked
+        var $eventElementToCopy = $('a.CustomRightClick[data-id="' + EventID + '"]'); 
+        if ($eventElementToCopy.length) {
+            window.copiedEventHTMLContent = $eventElementToCopy.find('div:first').html(); 
+            window.copiedEventCSS = $eventElementToCopy.find('div:first').attr('style'); 
+            window.copiedEventType = $eventElementToCopy.attr('EventType');
+            window.copiedEventOriginalID = EventID; 
+            
+            $('#ButtonPasteEvent').css('color', 'black').prop('disabled', false); // Visually enable paste
+            console.log("Copied event ID: " + EventID + " Type: " + window.copiedEventType);
+        } else {
+            window.copiedEventHTMLContent = null; // Clear if element not found
+            console.error("Could not find event element to copy with ID: " + EventID);
+        }
+        // This $.get is to inform the server, which sets a session variable.
+        // This is part of the existing mechanism.
+        $.get("ajax.php", { EventIDtoCopy: EventID }).done(function(data){                
+            console.log("Server notified of copy for event ID: " + EventID);
         });
     }
+
+    // Delete Command - Optimistic Update
+    $('#ButtonDeleteEvent').off('click').on('click', function(e_click) {
+        e_click.preventDefault(); // Prevent default navigation from any href
+
+        // 'EventID' here refers to the EventID from the outer contextmenu handler's scope.
+        
+        if (confirm('Are you sure you want to delete this event (ID: ' + EventID + ')?')) {
+            var $eventToRemove = $('a.CustomRightClick.event[data-id="' + EventID + '"]');
+
+            if ($eventToRemove.length === 0) {
+                alert("Error: Could not find the event element to remove.");
+                $('#rmenu').addClass('hide'); // Hide context menu
+                return;
+            }
+
+            // Store for potential revert
+            var $eventCloneForRevert = $eventToRemove.clone(true, true); // Deep clone
+            var $originalParentForRevert = $eventToRemove.parent();
+
+            $eventToRemove.remove(); // Optimistic UI update
+            var $rmenuElement = $('#rmenu');
+            if ($rmenuElement.length) {
+                $rmenuElement.addClass('hide'); // Hide context menu immediately
+            }
+
+            $.ajax({
+                url: '/apps/Calendar/calendarevent.php', // Path to the server-side delete script
+                type: 'GET', 
+                data: { 
+                    actionform: 'delete', 
+                    calendareventid: EventID 
+                },
+                success: function(response) {
+                    console.log('Event ' + EventID + ' delete request successful on server.');
+                    // Optionally check 'response' for a true success message from server.
+                    // Cleanup clone data as it's no longer needed for revert
+                    $eventCloneForRevert = null;
+                    $originalParentForRevert = null;
+                },
+                error: function(jqXHR, textStatus, errorThrown) {
+                    alert('Failed to delete event on server. Error: ' + textStatus + '. Restoring event.');
+                    if ($originalParentForRevert && $originalParentForRevert.length && $eventCloneForRevert && $eventCloneForRevert.length) {
+                        $originalParentForRevert.append($eventCloneForRevert);
+                        // Re-apply draggable to the reverted element.
+                        $eventCloneForRevert.draggable({
+                            start: function(e_drag_start) {
+                                window.draggedOriginalElement = $(this);
+                                window.originalCell = $(this).parent();
+                                $(this).css('opacity', 0.5);
+                            },
+                            stop: function() {
+                                if (window.draggedOriginalElement) { $(this).css('opacity', 1); }
+                            },
+                            appendTo: 'body',
+                            containment: "window",
+                            scroll: false,
+                            helper: 'clone'
+                        });
+                    } else {
+                        console.error('Could not restore event. Parent or clone missing. Please refresh.');
+                        alert('Failed to restore event on the page. Please refresh the calendar.');
+                    }
+                }
+            });
+        } else {
+           // User cancelled confirm, hide menu
+           $('#rmenu').addClass('hide');
+        }
+    });
     document.getElementById("rmenuPhonenote").className = "hide";
     document.getElementById("rmenuCase").className = "hide";
 
@@ -618,18 +728,59 @@ if ($("#CustomRightClickCase").addEventListener) {
     
 
     //Paste Command
-    document.getElementById("ButtonPasteEvent").onclick = function ()
-    {
-    var NewParentABlock = DateToPaste;
+    document.getElementById("ButtonPasteEvent").onclick = function () {
+        if (!window.copiedEventHTMLContent) {
+            alert("Please copy an event first.");
+            return;
+        }
+        var targetDate = DateToPaste; // DateToPaste is defined in 'li.CustomRightClickCase' contextmenu
+        var $targetCell = $('li.CustomRightClickCase[data-id="' + targetDate + '"]');
 
-        $(function()
-        {
-            $.get("ajax.php", {PasteLocation:NewParentABlock}).done(function(data){                
-                    // Display the returned data in browser   
-                    location.reload();
-                }); 
-        });
+        if ($targetCell.length) {
+            var tempID = "temp-event-" + Date.now(); // Temporary ID for the new element
+            // EventID attribute on the new anchor is left empty or could be tempID. 
+            // The server will assign the true new ID.
+            var newEventHTML = '<a id="' + tempID + '" style="display:block; cursor:pointer;" class="draggable event CustomRightClick" EventType="' + window.copiedEventType + '" EventID="">' +
+                               '<div style="' + (window.copiedEventCSS || '') + '">' + window.copiedEventHTMLContent + '</div>' +
+                               '</a>';
+            var $newEventElement = $(newEventHTML);
+            $targetCell.append($newEventElement);
 
+            // Make the new element draggable.
+            // This needs to use the same draggable settings as other elements if possible.
+            $newEventElement.draggable({ /* ... simplified or full draggable options ... */ 
+                start:function(e){
+                    EventID = $(this).attr('EventID'); EventType = $(this).attr('EventType');
+                    window.draggedOriginalElement = $(this); window.originalCell = $(this).parent();
+                    $(this).css('opacity', 0.5);
+                },
+                stop: function(){ if(window.draggedOriginalElement){$(this).css('opacity', 1);} },
+                appendTo: 'body', containment: "window", scroll: false, helper: 'clone'
+            });
+
+            // AJAX call to server to perform the paste.
+            // Pass original ID so server knows which event to duplicate.
+            $.get("ajax.php", { PasteLocation: targetDate, EventIDToPaste: window.copiedEventOriginalID })
+                .done(function(response) {
+                    console.log("Paste successful on server for original event ID: " + window.copiedEventOriginalID + " to date: " + targetDate);
+                    // Server response might include new event ID and other details.
+                    // e.g., if (response && response.newEventID) { $newEventElement.attr('EventID', response.newEventID); }
+                    // $newEventElement.removeAttr('id'); // Remove temporary DOM ID, or set it to new permanent one.
+                    // For now, the 15s refresh will update with proper ID.
+                })
+                .fail(function() {
+                    alert("Paste failed on server.");
+                    $('#' + tempID).remove(); // Remove the optimistically added element
+                })
+                .always(function() {
+                    // Optionally, clear copied data and disable paste button to prevent re-pasting same item
+                    // window.copiedEventHTMLContent = null;
+                    // window.copiedEventOriginalID = null;
+                    // $('#ButtonPasteEvent').css('color', 'gray').prop('disabled', true);
+                });
+        } else {
+            alert("Target cell for paste not found for date: " + targetDate);
+        }
     }
 
 
@@ -798,11 +949,18 @@ $(document).on('keyup', function(e) {
 
 // Make menu right clicks menus disappear 
 $(document).bind("click", function(event) {
-document.getElementById("rmenu").className = "hide";
-document.getElementById("rmenuCase").className = "hide";
-document.getElementById("rmenuPhoneNote").className = "hide";
-
-
+    var rmenuEl = document.getElementById("rmenu");
+    if (rmenuEl) {
+        rmenuEl.className = "hide";
+    }
+    var rmenuCaseEl = document.getElementById("rmenuCase");
+    if (rmenuCaseEl) {
+        rmenuCaseEl.className = "hide";
+    }
+    var rmenuPhoneNoteEl = document.getElementById("rmenuPhoneNote");
+    if (rmenuPhoneNoteEl) {
+        rmenuPhoneNoteEl.className = "hide";
+    }
 });
 
 
@@ -1459,7 +1617,7 @@ echo"</div>";
 
     <div style="with:100%; height:1px; background-color:lightgray; margin-top:7px; margin-bottom:7px;"></div>
     <li style="">
-      <a id="ButtonDeleteEvent" href="" onclick="return confirm('Are you sure you want to delete this entry?')">✖ Delete</a>
+      <a id="ButtonDeleteEvent" href="javascript:void(0);">✖ Delete</a>
     </li>
   </ul>
 </div>
