@@ -379,14 +379,10 @@ $ParentPage = "/index.php";
 <link rel="stylesheet" href="https://code.jquery.com/ui/1.13.2/themes/base/jquery-ui.css">
 
 
-
- <script src="https://code.jquery.com/jquery-1.12.4.min.js"></script>
-
  <!---These 2 following scripts are for the draggable, droppable & resizable functions-->  
   <script src="https://code.jquery.com/jquery-3.6.0.js"></script>
   <script src="https://code.jquery.com/ui/1.13.2/jquery-ui.js"></script>
   
-  <link rel="stylesheet" type="text/css" href="https://code.jquery.com/ui/1.9.2/themes/base/jquery-ui.css"/>
   <script>
         document.addEventListener("DOMContentLoaded", function () {
             const offCanvasMenu = document.getElementById("off-canvas-menu");
@@ -476,9 +472,12 @@ window.initializeCalendarDragDrop = function() {
     appendTo: 'body',
     containment: "window",
     scroll: false,
-    helper: 'clone'
+    helper: 'clone',
+    scope: 'event' // Add this
     });
     $(".droppable").droppable({
+        greedy: true, 
+        scope: 'event', // Add this
         drop: function(event, ui) { // 'this' is the droppable cell
             var $thisCell = $(this);
             // Ensure data-id attribute exists, otherwise default or error out
@@ -601,6 +600,34 @@ $(document).keyup(function(e) {
 
 /// Right click javascript
 $(document).ready(function() {
+
+
+  $(document).ajaxComplete(function(event, xhr, settings) {
+    if (settings.url === "ajax.php") {
+        var $popup = $('#ExternalDataPopup');
+        if($popup.is(':visible')) {
+          try {
+            if ($popup.data('ui-resizable')) {
+                $popup.resizable('destroy');
+            }
+          }
+             catch(e) {
+                console.error("Error destroying resizable: ", e);
+            }
+            $popup.resizable({
+                handles: 'all',
+                minWidth: 300,
+                minHeight: 200
+
+            });
+            
+          }
+        }
+      
+    
+  });
+
+
 
 
 ///  RIGHT CLICK CALENDAR EVENT
@@ -917,10 +944,23 @@ function ShowExternalDataPopup(EventID, AppToDisplay) {
 
     $popup.draggable({
         handle: '.popup-header',
-        start: function() {
-            $(this).css({ transform: 'none' });
+        start: function(event, ui) {
+            $(this).css({ opacity: 0 }); 
+            // The transform: 'none' is now set when the popup is shown, 
+            // so it doesn't need to be set again here.
         },
-        containment: 'window'
+        stop: function(event, ui) {
+            $(this).css({
+                opacity: 1,
+                top: ui.position.top + 'px',
+                left: ui.position.left + 'px'
+            });
+        },
+        containment: 'window',
+        zIndex: 10000,
+        helper: 'clone', // Use standard clone
+        appendTo: 'body', // Append helper to body
+        scope: 'popup'    // Set scope to 'popup'
     }).resizable({
         handles: 'all',
         minWidth: 300,
@@ -929,6 +969,14 @@ function ShowExternalDataPopup(EventID, AppToDisplay) {
 
     // Show popup
     $popup.removeClass('hide').show();
+
+    // Convert transform centering to top/left for stable dragging
+    const currentOffset = $popup.offset();
+    $popup.css({
+        top: currentOffset.top + 'px',
+        left: currentOffset.left + 'px',
+        transform: 'none' // Remove transform so top/left positioning takes over
+    });
 
     // Load content
     $.ajax({
@@ -951,22 +999,6 @@ function ShowExternalDataPopup(EventID, AppToDisplay) {
                 </div>
                 <div class="popup-content">${data}</div>
             `);
-
-            // Reapply draggable and resizable after content update
-            try { $popup.draggable('destroy'); } catch(e){}
-            try { $popup.resizable('destroy'); } catch(e){}
-            
-            $popup.draggable({
-                handle: '.popup-header',
-                start: function() {
-                    $(this).css({ transform: 'none' });
-                },
-                containment: 'window'
-            }).resizable({
-                handles: 'all',
-                minWidth: 300,
-                minHeight: 200
-            });
 
             // Reattach close handler
             $popup.find('.popup-close').on('click', function() {
@@ -1099,7 +1131,7 @@ $("#CalendarsToRefresh").load(<?php echo json_encode($CurrentPageNow . ' #Calend
 });
 
 
-}, 15000);
+}, 5000); // Refresh every 5 seconds
 });
 
 </script>  
