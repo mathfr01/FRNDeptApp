@@ -428,9 +428,17 @@ $ParentPage = "/index.php";
     </script>
     
      <script>                                     
-$(document).ready(function(){
 
-function initializeCalendarDragDrop() {
+window.isDragging = false; // Initialize isDragging
+
+// Define initializeCalendarDragDrop in a scope accessible by setInterval
+window.initializeCalendarDragDrop = function() {
+    // If a drag operation is already in progress, don't re-initialize
+    if (window.isDragging) {
+        console.log("Drag in progress, skipping re-initialization.");
+        return;
+    }
+
     // Ensure any existing draggables/droppables are destroyed to prevent duplicates if this is called multiple times
     if ($(".draggable").data('ui-draggable')) {
         $(".draggable").draggable('destroy');
@@ -442,6 +450,7 @@ function initializeCalendarDragDrop() {
     // var result = {}; // This seems unused in the optimistic logic
     $(".draggable").draggable({
     	start:function(event, ui){ 
+            window.isDragging = true; // Set isDragging to true
             // result.drag = e.target.id.split("_")[1]; // This 'result' variable seems part of an old logic, not used in new one.
             EventID = $(this).attr('EventID'); // Global from original script
             EventType = $(this).attr('EventType'); // Global from original script
@@ -456,6 +465,7 @@ function initializeCalendarDragDrop() {
             ui.helper.css('zIndex', 9999); 
     },
     stop: function(event, ui) {
+        window.isDragging = false; // Set isDragging to false
         // If the element is still being tracked (i.e., not successfully dropped and cleared)
         // and its opacity is still 0.5, reset it.
         if (window.draggedOriginalElement && $(this).css('opacity') < 1) {
@@ -1058,6 +1068,12 @@ if (CurrentCaseDate) { // Add this null check
 
 /// Refresh calendars  
 setInterval(function(){
+      // If a drag operation is in progress, skip the refresh for this interval
+      if (window.isDragging) {
+          console.log("Drag in progress, skipping calendar refresh.");
+          return;
+      }
+
       // Store checkbox states before refresh
       const filterStates = {
         PhoneNote: document.getElementById("filter-phone-note").checked,
